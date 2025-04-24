@@ -1,73 +1,110 @@
-# Welcome to your Lovable project
 
-## Project info
+# NeuroShield AI Guardian
 
-**URL**: https://lovable.dev/projects/663df45c-23f6-46a3-81c0-27e05bde67bc
+A mobile application that performs non-invasive, AI-driven early detection and monitoring of neurological disorders using users' webcam/microphone data.
 
-## How can I edit this code?
+## Project Structure
 
-There are several ways of editing your application.
+- `src/` - Frontend React code
+- `backend/` - Express.js backend for API endpoints
+- `ml_service/` - Python FastAPI service for ML inference
 
-**Use Lovable**
+## Setup Instructions
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/663df45c-23f6-46a3-81c0-27e05bde67bc) and start prompting.
+### Prerequisites
 
-Changes made via Lovable will be committed automatically to this repo.
+- Node.js (v14+)
+- PostgreSQL
+- Python 3.8+
+- Docker and Docker Compose (optional)
 
-**Use your preferred IDE**
+### Development Setup
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+1. **Clone the repository**
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+2. **Frontend Setup**
 
-Follow these steps:
+   ```bash
+   # Install dependencies
+   npm install
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+   # Create .env file (already created in repo)
+   echo "VITE_API_URL=http://localhost:5000" > .env
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+   # Start the development server
+   npm run dev
+   ```
 
-# Step 3: Install the necessary dependencies.
-npm i
+3. **Backend Setup**
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+   ```bash
+   # Navigate to backend directory
+   cd backend
 
-**Edit a file directly in GitHub**
+   # Install dependencies
+   npm install
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+   # Set up environment variables (already created in repo)
+   # Edit .env file if needed
 
-**Use GitHub Codespaces**
+   # Initialize Prisma
+   npx prisma migrate dev --name init
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+   # Start the development server
+   npm run dev
+   ```
 
-## What technologies are used for this project?
+4. **ML Service Setup**
 
-This project is built with:
+   ```bash
+   # Navigate to ml_service directory
+   cd ml_service
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+   # Create a virtual environment
+   python -m venv venv
 
-## How can I deploy this project?
+   # Activate the virtual environment
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-Simply open [Lovable](https://lovable.dev/projects/663df45c-23f6-46a3-81c0-27e05bde67bc) and click on Share -> Publish.
+   # Install dependencies
+   pip install -r requirements.txt
 
-## Can I connect a custom domain to my Lovable project?
+   # Start the server
+   uvicorn main:app --reload
+   ```
 
-Yes, you can!
+5. **Using Docker Compose (Optional)**
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+   ```bash
+   # Start all services
+   docker-compose up -d
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+   # Stop all services
+   docker-compose down
+   ```
+
+## API Endpoints
+
+### Authentication
+
+- `POST /api/auth/register` - Register a new user
+- `POST /api/auth/login` - Login a user
+
+### Sessions
+
+- `GET /api/sessions` - Get all sessions for the authenticated user
+- `POST /api/sessions` - Create a new session
+
+### Upload
+
+- `POST /api/upload` - Upload video and audio for ML processing
+
+## ML Inference Endpoints
+
+- `POST /infer/video` - Process video and extract features
+- `POST /infer/audio` - Process audio and extract features
+- `POST /infer/fusion` - Combine features and generate risk score
+
+## License
+
+[MIT](LICENSE)

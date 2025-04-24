@@ -1,8 +1,13 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { useToast } from '@/hooks/use-toast';
+
+// This would normally be fetched from the authentication context
+// For this example, we'll use a mock token
+const MOCK_AUTH_TOKEN = 'Bearer mock_jwt_token';
 
 enum AssessmentStage {
   INTRO = 'intro',
@@ -12,26 +17,183 @@ enum AssessmentStage {
   RESULTS = 'results'
 }
 
+interface AssessmentResult {
+  riskScore: number;
+  riskClass: string;
+  motorControl: string;
+  speechPattern: string;
+  facialExpression: string;
+}
+
 const AssessmentTool: React.FC = () => {
   const [stage, setStage] = useState<AssessmentStage>(AssessmentStage.INTRO);
   const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState<AssessmentResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   
-  // Simulate recording progress
-  const startRecording = () => {
-    setStage(AssessmentStage.RECORDING);
-    setProgress(0);
-    
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setStage(AssessmentStage.PROCESSING);
-          setTimeout(() => setStage(AssessmentStage.RESULTS), 3000);
-          return 100;
-        }
-        return prev + 3.33; // 30 seconds = 100%
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const videoChunksRef = useRef<Blob[]>([]);
+  const audioChunksRef = useRef<Blob[]>([]);
+  
+  const { toast } = useToast();
+  
+  // Request camera and microphone permissions
+  const setupMedia = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: true 
       });
-    }, 1000);
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      
+      return stream;
+    } catch (err) {
+      console.error('Error accessing media devices:', err);
+      toast({
+        title: "Permission Error",
+        description: "Please allow camera and microphone access to continue",
+        variant: "destructive"
+      });
+      throw err;
+    }
+  };
+  
+  // Start the assessment recording process
+  const startRecording = async () => {
+    try {
+      videoChunksRef.current = [];
+      audioChunksRef.current = [];
+      
+      // Get media stream
+      const stream = await setupMedia();
+      
+      // Setup media recorder for video
+      const videoTrack = stream.getVideoTracks()[0];
+      const videoStream = new MediaStream([videoTrack]);
+      const videoRecorder = new MediaRecorder(videoStream);
+      
+      videoRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          videoChunksRef.current.push(e.data);
+        }
+      };
+      
+      // Setup media recorder for audio
+      const audioTrack = stream.getAudioTracks()[0];
+      const audioStream = new MediaStream([audioTrack]);
+      const audioRecorder = new MediaRecorder(audioStream);
+      
+      audioRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+      
+      // Start recording
+      videoRecorder.start();
+      audioRecorder.start();
+      mediaRecorderRef.current = videoRecorder;
+      
+      setStage(AssessmentStage.RECORDING);
+      setProgress(0);
+      
+      // Track progress for 30 seconds
+      const interval = setInterval(() => {
+        setProgress((prev) => {
+          const newProgress = prev + 3.33; // 30 seconds = 100%
+          
+          if (newProgress >= 100) {
+            clearInterval(interval);
+            videoRecorder.stop();
+            audioRecorder.stop();
+            
+            // Process the recording after a short delay
+            setTimeout(() => {
+              processRecording();
+            }, 1000);
+            
+            return 100;
+          }
+          
+          return newProgress;
+        });
+      }, 1000);
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      toast({
+        title: "Recording Error",
+        description: "Could not start recording. Please check your camera and microphone permissions.",
+        variant: "destructive"
+      });
+    }
+  };
+  
+  // Upload the recorded video and audio to the backend
+  const processRecording = async () => {
+    setStage(AssessmentStage.PROCESSING);
+    
+    try {
+      const videoBlob = new Blob(videoChunksRef.current, { type: 'video/webm' });
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      
+      // Create form data for upload
+      const formData = new FormData();
+      formData.append('video', videoBlob, 'recording.webm');
+      formData.append('audio', audioBlob, 'audio.webm');
+      
+      // Upload to backend
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': MOCK_AUTH_TOKEN
+        },
+        body: formData
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      // Process results
+      const sessionData = data.session;
+      const fusionOutput = sessionData.fusionOutput;
+      
+      setResult({
+        riskScore: sessionData.riskScore,
+        riskClass: fusionOutput.riskClass || 'Low Risk',
+        motorControl: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal',
+        speechPattern: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal',
+        facialExpression: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal'
+      });
+      
+      // Stop media tracks
+      if (videoRef.current && videoRef.current.srcObject) {
+        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+        tracks.forEach(track => track.stop());
+      }
+      
+      // Show results
+      setStage(AssessmentStage.RESULTS);
+      
+    } catch (error) {
+      console.error('Processing error:', error);
+      setError('An error occurred while processing your assessment. Please try again.');
+      
+      toast({
+        title: "Processing Error",
+        description: "Failed to process your assessment. Please try again.",
+        variant: "destructive"
+      });
+      
+      // Return to intro stage on error
+      setStage(AssessmentStage.INTRO);
+    }
   };
   
   return (
@@ -82,12 +244,13 @@ const AssessmentTool: React.FC = () => {
         {stage === AssessmentStage.PREP && (
           <div className="space-y-6">
             <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
-              <div className="text-center p-6">
-                <p className="text-lg font-medium mb-2">Camera Preview</p>
-                <p className="text-muted-foreground">
-                  Position your face clearly in the center of the frame
-                </p>
-              </div>
+              <video 
+                ref={videoRef} 
+                className="w-full h-full object-cover rounded-lg"
+                autoPlay 
+                muted 
+                playsInline
+              />
             </div>
             
             <div className="space-y-4">
@@ -122,13 +285,20 @@ const AssessmentTool: React.FC = () => {
         {stage === AssessmentStage.RECORDING && (
           <div className="space-y-6">
             <div className="aspect-video bg-muted rounded-lg flex items-center justify-center relative">
+              <video 
+                ref={videoRef} 
+                className="w-full h-full object-cover rounded-lg"
+                autoPlay 
+                muted 
+                playsInline
+              />
               <div className="absolute top-4 right-4">
                 <div className="flex items-center gap-2 bg-black/70 text-white px-3 py-1 rounded-full">
                   <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
                   <span className="text-sm">Recording</span>
                 </div>
               </div>
-              <div className="text-center p-6">
+              <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-4 text-white text-center">
                 <p className="text-lg font-medium mb-2">Please read the following text aloud:</p>
                 <p className="text-xl">
                   "The rainbow appears after a storm when the sun shines through the rain."
@@ -159,7 +329,7 @@ const AssessmentTool: React.FC = () => {
           </div>
         )}
         
-        {stage === AssessmentStage.RESULTS && (
+        {stage === AssessmentStage.RESULTS && result && (
           <div className="space-y-6 py-4">
             <div className="text-center">
               <div className="mx-auto w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mb-4">
@@ -183,7 +353,12 @@ const AssessmentTool: React.FC = () => {
               <h4 className="font-medium mb-2">Risk Assessment</h4>
               <div className="flex justify-between items-center">
                 <span>Overall Risk Score:</span>
-                <span className="font-semibold text-green-700">15% (Low Risk)</span>
+                <span className={`font-semibold ${
+                  result.riskScore < 0.3 ? "text-green-700" : 
+                  result.riskScore < 0.6 ? "text-yellow-700" : "text-red-700"
+                }`}>
+                  {Math.round(result.riskScore * 100)}% ({result.riskClass})
+                </span>
               </div>
             </div>
             
@@ -191,30 +366,48 @@ const AssessmentTool: React.FC = () => {
               <div className="border-b pb-2">
                 <div className="flex justify-between">
                   <span>Motor Control Analysis</span>
-                  <span className="font-medium text-green-700">Normal</span>
+                  <span className={`font-medium ${
+                    result.motorControl === 'Normal' ? "text-green-700" : "text-yellow-700"
+                  }`}>
+                    {result.motorControl}
+                  </span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  No significant tremors or movement abnormalities detected
+                  {result.motorControl === 'Normal' 
+                    ? 'No significant tremors or movement abnormalities detected' 
+                    : 'Potential tremors or movement patterns detected'}
                 </p>
               </div>
               
               <div className="border-b pb-2">
                 <div className="flex justify-between">
                   <span>Speech Pattern Analysis</span>
-                  <span className="font-medium text-green-700">Normal</span>
+                  <span className={`font-medium ${
+                    result.speechPattern === 'Normal' ? "text-green-700" : "text-yellow-700"
+                  }`}>
+                    {result.speechPattern}
+                  </span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Speech rhythm and pronunciation within expected parameters
+                  {result.speechPattern === 'Normal'
+                    ? 'Speech rhythm and pronunciation within expected parameters'
+                    : 'Speech patterns show potential irregularities'}
                 </p>
               </div>
               
               <div className="border-b pb-2">
                 <div className="flex justify-between">
                   <span>Facial Expression Analysis</span>
-                  <span className="font-medium text-green-700">Normal</span>
+                  <span className={`font-medium ${
+                    result.facialExpression === 'Normal' ? "text-green-700" : "text-yellow-700"
+                  }`}>
+                    {result.facialExpression}
+                  </span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Facial symmetry and micro-expressions indicate normal neural function
+                  {result.facialExpression === 'Normal'
+                    ? 'Facial symmetry and micro-expressions indicate normal neural function'
+                    : 'Facial expressions show potential asymmetry or irregularities'}
                 </p>
               </div>
             </div>
@@ -232,6 +425,12 @@ const AssessmentTool: React.FC = () => {
                 View Detailed Report
               </Button>
             </div>
+          </div>
+        )}
+        
+        {error && (
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+            <p className="text-red-700">{error}</p>
           </div>
         )}
       </CardContent>
