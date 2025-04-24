@@ -1,9 +1,11 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
+import { Camera, MicOff, AlertTriangle } from 'lucide-react';
+import apiClient from '@/api/apiClient';
 
 // This would normally be fetched from the authentication context
 // For this example, we'll use a mock token
@@ -30,54 +32,163 @@ const AssessmentTool: React.FC = () => {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<AssessmentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [hasPermissions, setHasPermissions] = useState<boolean>(false);
+  const [isFrontCamera, setIsFrontCamera] = useState<boolean>(true);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const videoChunksRef = useRef<Blob[]>([]);
   const audioChunksRef = useRef<Blob[]>([]);
   
   const { toast } = useToast();
   
+  // Check if we're on a mobile device
+  const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+    navigator.userAgent
+  );
+  
   // Request camera and microphone permissions
-  const setupMedia = async () => {
+  const setupMedia = async (preparationMode = false) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
-      });
+      // If already have a stream and just checking camera preview, close it
+      if (streamRef.current && !preparationMode) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      
+      // Set up constraints for the media stream
+      const constraints = {
+        audio: true,
+        video: {
+          facingMode: isFrontCamera ? "user" : "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.muted = true; // Mute the video to prevent feedback
+        
+        // Ensure video plays when it's loaded
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch(e => {
+            console.error("Failed to play video:", e);
+            toast({
+              title: "Video Error",
+              description: "Could not play camera feed. Please refresh and try again.",
+              variant: "destructive"
+            });
+          });
+        };
       }
       
+      streamRef.current = stream;
+      setHasPermissions(true);
       return stream;
     } catch (err) {
       console.error('Error accessing media devices:', err);
+      setHasPermissions(false);
+      
+      // Create more detailed error messages based on error type
+      let errorMessage = "Please allow camera and microphone access to continue";
+      
+      if (err instanceof DOMException) {
+        if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          errorMessage = "No camera or microphone found. Please connect a device and try again.";
+        } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          errorMessage = "Camera and microphone access denied. Please grant permissions in your browser settings.";
+        } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+          errorMessage = "Your camera or microphone is already in use by another application.";
+        } else if (err.name === 'OverconstrainedError') {
+          errorMessage = "The requested camera settings are not available on your device.";
+        } else if (err.name === 'SecurityError') {
+          errorMessage = "Media access is not allowed in this context. Please ensure you're using HTTPS.";
+        }
+      }
+      
+      setError(errorMessage);
+      
       toast({
         title: "Permission Error",
-        description: "Please allow camera and microphone access to continue",
+        description: errorMessage,
         variant: "destructive"
       });
+      
       throw err;
     }
   };
   
+  // Effect to set up camera when entering prep stage
+  useEffect(() => {
+    if (stage === AssessmentStage.PREP) {
+      setupMedia(true).catch(() => {
+        // This is handled in setupMedia
+      });
+      
+      // Cleanup: Stop media tracks when component unmounts or stage changes
+      return () => {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
+      };
+    }
+  }, [stage]); 
+  
   // Start the assessment recording process
   const startRecording = async () => {
     try {
+      // Reset state
       videoChunksRef.current = [];
       audioChunksRef.current = [];
+      setError(null);
       
-      // Get media stream
+      // Start countdown
+      setCountdown(3);
+      
+      // Begin countdown sequence
+      const countdownInterval = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev !== null && prev > 1) {
+            return prev - 1;
+          } else {
+            clearInterval(countdownInterval);
+            initiateRecording();
+            return null;
+          }
+        });
+      }, 1000);
+      
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      toast({
+        title: "Recording Error",
+        description: "Could not start recording. Please check your camera and microphone permissions.",
+        variant: "destructive"
+      });
+    }
+  };
+  
+  // Actually start recording after countdown
+  const initiateRecording = async () => {
+    try {
+      // Make sure we have a fresh stream
       const stream = await setupMedia();
       
       // Setup media recorder for video
       const videoTrack = stream.getVideoTracks()[0];
       const videoStream = new MediaStream([videoTrack]);
-      const videoRecorder = new MediaRecorder(videoStream);
+      const videoRecorder = new MediaRecorder(videoStream, {
+        mimeType: 'video/webm;codecs=vp9'
+      });
       
       videoRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
+        if (e.data && e.data.size > 0) {
           videoChunksRef.current.push(e.data);
         }
       };
@@ -85,17 +196,19 @@ const AssessmentTool: React.FC = () => {
       // Setup media recorder for audio
       const audioTrack = stream.getAudioTracks()[0];
       const audioStream = new MediaStream([audioTrack]);
-      const audioRecorder = new MediaRecorder(audioStream);
+      const audioRecorder = new MediaRecorder(audioStream, {
+        mimeType: 'audio/webm'
+      });
       
       audioRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
+        if (e.data && e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
       };
       
       // Start recording
-      videoRecorder.start();
-      audioRecorder.start();
+      videoRecorder.start(1000); // Collect data in 1-second chunks
+      audioRecorder.start(1000);
       mediaRecorderRef.current = videoRecorder;
       
       setStage(AssessmentStage.RECORDING);
@@ -123,12 +236,13 @@ const AssessmentTool: React.FC = () => {
         });
       }, 1000);
     } catch (error) {
-      console.error('Error starting recording:', error);
+      console.error('Error in initiating recording:', error);
       toast({
         title: "Recording Error",
         description: "Could not start recording. Please check your camera and microphone permissions.",
         variant: "destructive"
       });
+      setStage(AssessmentStage.PREP);
     }
   };
   
@@ -137,49 +251,47 @@ const AssessmentTool: React.FC = () => {
     setStage(AssessmentStage.PROCESSING);
     
     try {
+      // Check if we have video data
+      if (videoChunksRef.current.length === 0 || audioChunksRef.current.length === 0) {
+        throw new Error("No video or audio data recorded");
+      }
+      
       const videoBlob = new Blob(videoChunksRef.current, { type: 'video/webm' });
       const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
       
-      // Create form data for upload
-      const formData = new FormData();
-      formData.append('video', videoBlob, 'recording.webm');
-      formData.append('audio', audioBlob, 'audio.webm');
-      
-      // Upload to backend
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/upload`, {
-        method: 'POST',
-        headers: {
-          'Authorization': MOCK_AUTH_TOKEN
-        },
-        body: formData
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`);
+      // Check if blobs have content
+      if (videoBlob.size === 0 || audioBlob.size === 0) {
+        throw new Error("Empty video or audio recording");
       }
       
-      const data = await response.json();
-      
-      // Process results
-      const sessionData = data.session;
-      const fusionOutput = sessionData.fusionOutput;
-      
-      setResult({
-        riskScore: sessionData.riskScore,
-        riskClass: fusionOutput.riskClass || 'Low Risk',
-        motorControl: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal',
-        speechPattern: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal',
-        facialExpression: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal'
-      });
-      
-      // Stop media tracks
-      if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-        tracks.forEach(track => track.stop());
+      // Use the apiClient instead of raw fetch
+      try {
+        const data = await apiClient.uploadAssessment(videoBlob, audioBlob);
+        
+        // Process results
+        const sessionData = data.session;
+        const fusionOutput = sessionData.fusionOutput;
+        
+        setResult({
+          riskScore: sessionData.riskScore,
+          riskClass: fusionOutput.riskClass || 'Low Risk',
+          motorControl: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal',
+          speechPattern: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal',
+          facialExpression: sessionData.riskScore < 0.3 ? 'Normal' : 'Abnormal'
+        });
+        
+        // Show results
+        setStage(AssessmentStage.RESULTS);
+        
+        toast({
+          title: "Analysis Complete",
+          description: "Your neurological assessment has been processed successfully.",
+        });
+        
+      } catch (apiError) {
+        console.error("API error:", apiError);
+        throw new Error(`Server error: ${apiError.message}`);
       }
-      
-      // Show results
-      setStage(AssessmentStage.RESULTS);
       
     } catch (error) {
       console.error('Processing error:', error);
@@ -193,8 +305,45 @@ const AssessmentTool: React.FC = () => {
       
       // Return to intro stage on error
       setStage(AssessmentStage.INTRO);
+    } finally {
+      // Stop and clear media tracks regardless of success/failure
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
     }
   };
+
+  // Toggle camera between front and back (mobile only)
+  const toggleCamera = () => {
+    setIsFrontCamera(prev => !prev);
+    
+    // Re-initialize camera with new facing mode
+    if (stage === AssessmentStage.PREP) {
+      // First stop existing tracks
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      
+      // Then setup new stream with toggled camera
+      setupMedia(true).catch(() => {
+        // Error handling in setupMedia
+      });
+    }
+  };
+  
+  // Cleanup when component unmounts
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
   
   return (
     <Card className="max-w-3xl mx-auto">
@@ -243,38 +392,67 @@ const AssessmentTool: React.FC = () => {
         
         {stage === AssessmentStage.PREP && (
           <div className="space-y-6">
-            <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
-              <video 
-                ref={videoRef} 
-                className="w-full h-full object-cover rounded-lg"
-                autoPlay 
-                muted 
-                playsInline
-              />
+            <div className="aspect-video bg-muted rounded-lg flex items-center justify-center relative overflow-hidden">
+              {!hasPermissions ? (
+                <div className="flex flex-col items-center justify-center p-4">
+                  <Camera className="w-12 h-12 text-muted-foreground mb-2" />
+                  <p className="text-center text-muted-foreground">Camera access required for assessment</p>
+                  <Button 
+                    variant="outline" 
+                    className="mt-4"
+                    onClick={() => setupMedia(true)}
+                  >
+                    Grant Camera Access
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <video 
+                    ref={videoRef} 
+                    className="w-full h-full object-cover rounded-lg"
+                    autoPlay 
+                    playsInline
+                    muted
+                  />
+                  {isMobile && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="absolute top-2 right-2 bg-black/50 text-white"
+                      onClick={toggleCamera}
+                    >
+                      Switch Camera
+                    </Button>
+                  )}
+                </>
+              )}
             </div>
             
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">Preparation Checklist</h3>
-              <div className="space-y-2">
-                <div className="flex items-center">
-                  <div className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center mr-2">✓</div>
-                  <span>Good lighting detected</span>
-                </div>
-                <div className="flex items-center">
-                  <div className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center mr-2">✓</div>
-                  <span>Microphone working properly</span>
-                </div>
-                <div className="flex items-center">
-                  <div className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center mr-2">✓</div>
-                  <span>Face positioned correctly</span>
+            {hasPermissions && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium">Preparation Checklist</h3>
+                <div className="space-y-2">
+                  <div className="flex items-center">
+                    <div className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center mr-2">✓</div>
+                    <span>Good lighting detected</span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center mr-2">✓</div>
+                    <span>Microphone working properly</span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center mr-2">✓</div>
+                    <span>Face positioned correctly</span>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
             
             <div className="text-center pt-4">
               <Button
                 className="bg-neuroshield-blue hover:bg-neuroshield-blue/90"
                 onClick={startRecording}
+                disabled={!hasPermissions}
               >
                 Start Recording
               </Button>
@@ -285,19 +463,27 @@ const AssessmentTool: React.FC = () => {
         {stage === AssessmentStage.RECORDING && (
           <div className="space-y-6">
             <div className="aspect-video bg-muted rounded-lg flex items-center justify-center relative">
+              {countdown !== null && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white z-10">
+                  <span className="text-7xl font-bold animate-pulse">{countdown}</span>
+                </div>
+              )}
+              
               <video 
                 ref={videoRef} 
                 className="w-full h-full object-cover rounded-lg"
                 autoPlay 
-                muted 
                 playsInline
+                muted
               />
+              
               <div className="absolute top-4 right-4">
                 <div className="flex items-center gap-2 bg-black/70 text-white px-3 py-1 rounded-full">
                   <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
                   <span className="text-sm">Recording</span>
                 </div>
               </div>
+              
               <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-4 text-white text-center">
                 <p className="text-lg font-medium mb-2">Please read the following text aloud:</p>
                 <p className="text-xl">
@@ -311,7 +497,7 @@ const AssessmentTool: React.FC = () => {
                 <span>Progress</span>
                 <span>{Math.min(100, Math.round(progress))}%</span>
               </div>
-              <Progress value={progress} />
+              <Progress value={progress} className="h-2" />
               <p className="text-xs text-center text-muted-foreground">
                 Please follow the on-screen instructions until the recording is complete
               </p>
@@ -429,7 +615,8 @@ const AssessmentTool: React.FC = () => {
         )}
         
         {error && (
-          <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded flex items-start">
+            <AlertTriangle className="text-red-500 mr-2 mt-0.5 flex-shrink-0" />
             <p className="text-red-700">{error}</p>
           </div>
         )}
