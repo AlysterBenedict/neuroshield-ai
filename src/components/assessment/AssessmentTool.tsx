@@ -58,6 +58,8 @@ const AssessmentTool: React.FC = () => {
         streamRef.current = null;
       }
       
+      console.log("Setting up media stream");
+      
       // Set up constraints for the media stream
       const constraints = {
         audio: true,
@@ -69,6 +71,7 @@ const AssessmentTool: React.FC = () => {
       };
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log("Got media stream:", stream);
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -76,15 +79,22 @@ const AssessmentTool: React.FC = () => {
         
         // Ensure video plays when it's loaded
         videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play().catch(e => {
-            console.error("Failed to play video:", e);
-            toast({
-              title: "Video Error",
-              description: "Could not play camera feed. Please refresh and try again.",
-              variant: "destructive"
-            });
-          });
+          if (videoRef.current) {
+            console.log("Video metadata loaded, attempting to play");
+            videoRef.current.play()
+              .then(() => console.log("Video playback started"))
+              .catch(e => {
+                console.error("Failed to play video:", e);
+                toast({
+                  title: "Video Error",
+                  description: "Could not play camera feed. Please refresh and try again.",
+                  variant: "destructive"
+                });
+              });
+          }
         };
+      } else {
+        console.error("Video reference not available");
       }
       
       streamRef.current = stream;
@@ -126,19 +136,21 @@ const AssessmentTool: React.FC = () => {
   // Effect to set up camera when entering prep stage
   useEffect(() => {
     if (stage === AssessmentStage.PREP) {
-      setupMedia(true).catch(() => {
-        // This is handled in setupMedia
+      console.log("Prep stage entered, setting up media");
+      setupMedia(true).catch((err) => {
+        console.error("Failed to set up media:", err);
       });
       
       // Cleanup: Stop media tracks when component unmounts or stage changes
       return () => {
+        console.log("Cleaning up media tracks");
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
           streamRef.current = null;
         }
       };
     }
-  }, [stage]); 
+  }, [stage]);
   
   // Start the assessment recording process
   const startRecording = async () => {
@@ -177,8 +189,10 @@ const AssessmentTool: React.FC = () => {
   // Actually start recording after countdown
   const initiateRecording = async () => {
     try {
+      console.log("Initiating recording");
       // Make sure we have a fresh stream
       const stream = await setupMedia();
+      console.log("Got fresh stream for recording:", stream);
       
       // Setup media recorder for video
       const videoTrack = stream.getVideoTracks()[0];
@@ -189,6 +203,7 @@ const AssessmentTool: React.FC = () => {
       
       videoRecorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
+          console.log("Video data chunk received:", e.data.size);
           videoChunksRef.current.push(e.data);
         }
       };
@@ -202,6 +217,7 @@ const AssessmentTool: React.FC = () => {
       
       audioRecorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
+          console.log("Audio data chunk received:", e.data.size);
           audioChunksRef.current.push(e.data);
         }
       };
@@ -223,6 +239,8 @@ const AssessmentTool: React.FC = () => {
             clearInterval(interval);
             videoRecorder.stop();
             audioRecorder.stop();
+            
+            console.log("Recording complete");
             
             // Process the recording after a short delay
             setTimeout(() => {
@@ -258,6 +276,9 @@ const AssessmentTool: React.FC = () => {
       
       const videoBlob = new Blob(videoChunksRef.current, { type: 'video/webm' });
       const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      
+      console.log("Video blob size:", videoBlob.size);
+      console.log("Audio blob size:", audioBlob.size);
       
       // Check if blobs have content
       if (videoBlob.size === 0 || audioBlob.size === 0) {
