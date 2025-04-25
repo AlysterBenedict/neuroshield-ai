@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 
 interface NavbarProps {
@@ -14,6 +14,16 @@ const Navbar: React.FC<NavbarProps> = ({
   onLogin = () => {}, 
   onLogout = () => {} 
 }) => {
+  const navigate = useNavigate();
+
+  const handleLogin = () => {
+    navigate('/login');
+  };
+
+  const handleSignUp = () => {
+    navigate('/signup');
+  };
+
   return (
     <nav className="w-full py-4 px-6 border-b border-border bg-background/95 backdrop-blur-sm fixed top-0 left-0 z-50">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -59,14 +69,14 @@ const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center gap-4">
               <Button 
                 variant="outline" 
-                onClick={onLogin}
+                onClick={handleLogin}
                 className="border-neuroshield-blue text-neuroshield-blue hover:bg-neuroshield-blue/10"
               >
                 Log in
               </Button>
               <Button
                 className="bg-neuroshield-blue text-white hover:bg-neuroshield-blue/90"
-                onClick={onLogin}
+                onClick={handleSignUp}
               >
                 Sign up
               </Button>

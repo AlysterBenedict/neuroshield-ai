@@ -2,65 +2,27 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: neuroshield
-      POSTGRES_PASSWORD: neuroshield
-      POSTGRES_DB: neuroshield
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - neuroshield-network
-
-  mongodb:
-    image: mongo:6
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodb-data:/data/db
-    networks:
-      - neuroshield-network
-
   backend:
     build:
       context: ./backend
-    depends_on:
-      - postgres
-    environment:
-      NODE_ENV: development
-      DATABASE_URL: postgresql://neuroshield:neuroshield@postgres:5432/neuroshield
-      PORT: 5000
-      JWT_SECRET: your_jwt_secret
-      ML_SERVICE_URL: http://ml-service:8000
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
-    networks:
-      - neuroshield-network
-
-  ml-service:
-    build:
-      context: ./ml_service
-    environment:
-      DATABASE_URL: mongodb://mongodb:27017/neuroshield
-      JWT_SECRET: neuroshield_jwt_secret_change_me_in_production
-      PORT: 8000
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+    env_file:
+      - ./.env
     depends_on:
-      - mongodb
-    networks:
-      - neuroshield-network
-
-networks:
-  neuroshield-network:
-    driver: bridge
-
-volumes:
-  postgres-data:
-  mongodb-data:
+      - backend
